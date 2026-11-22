@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- Removed standalone BigQuery Studio SQL scripts (`sql/01_create_remote_function.sql`, `sql/02_evaluate_bbc_news.sql`) and their references in favor of the Dataform pipeline (`definitions/`).
+
 ### Fixed
 - Pruned nested `.venv` directories (such as `function/.venv`) in `scripts/verify_security.sh` so `certifi/cacert.pem` is not flagged as a forbidden secret file.
 - Updated placeholder URL check in `scripts/verify_security.sh` to scan `definitions/` and `workflow_settings.yaml` instead of the removed `dataform/` directory.

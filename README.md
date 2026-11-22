@@ -83,18 +83,13 @@ export GEMINI_API_KEY="your-managed-api-key"
 
 ## Running the Evaluation
 
-### 1. BigQuery Studio SQL (`sql/`)
+### Dataform Pipeline
 
-- [sql/01_create_remote_function.sql](sql/01_create_remote_function.sql): Standalone DDL reference (already applied by `deploy.sh`).
-- [sql/02_evaluate_bbc_news.sql](sql/02_evaluate_bbc_news.sql): Materializes a deterministic 50-row stratified sample (`bbc_news_decisions_50`, 10 articles per category) and runs accuracy, confidence calibration, `auto_publish` vs `human_review` routing, market-moving probability, and editorial urgency queries. Replace `YOUR_PROJECT_ID` before running in BigQuery Studio (`Location: US`).
+Update `defaultProject` and `vars.cloudRunEndpoint` in [workflow_settings.yaml](workflow_settings.yaml), then compile and run the Dataform DAG:
 
-### 2. Dataform Pipeline (`dataform/`)
-
-Update `defaultProject` and `vars.cloudRunEndpoint` in [dataform/workflow_settings.yaml](dataform/workflow_settings.yaml), then compile and run the Dataform DAG:
-
-- Source declaration: [dataform/definitions/sources/bbc_news_fulltext.sqlx](dataform/definitions/sources/bbc_news_fulltext.sqlx)
-- Remote function operation: [dataform/definitions/functions/evaluate_article.sqlx](dataform/definitions/functions/evaluate_article.sqlx)
-- Staging table + assertions: [dataform/definitions/staging/bbc_news_decisions_50.sqlx](dataform/definitions/staging/bbc_news_decisions_50.sqlx)
+- Source declaration: [definitions/sources/bbc_news_fulltext.sqlx](definitions/sources/bbc_news_fulltext.sqlx)
+- Remote function operation: [definitions/functions/evaluate_article.sqlx](definitions/functions/evaluate_article.sqlx)
+- Staging table + assertions: [definitions/staging/bbc_news_decisions_50.sqlx](definitions/staging/bbc_news_decisions_50.sqlx)
 - Analytical marts: `eval_accuracy_by_category`, `eval_routing_summary`, `top_market_moving_articles`, `top_urgent_articles`
 
 ---
