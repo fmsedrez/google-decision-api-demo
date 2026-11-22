@@ -76,7 +76,7 @@ fi
 
 FORBIDDEN_FILES="$(find "${ROOT_DIR}" \
   -path "${ROOT_DIR}/.git" -prune -o \
-  -path "${ROOT_DIR}/.venv" -prune -o \
+  -name '.venv' -type d -prune -o \
   \( -name '.env' -o \( -name '.env.*' ! -name '.env.example' \) \
      -o -name '.df-credentials.json' \
      -o -name '*credentials*.json' \
@@ -114,10 +114,13 @@ else
   info "Skipping git history scan (git repository metadata is outside sandbox)."
 fi
 
-# Check sql/ and dataform/ for real Cloud Run endpoints or missing placeholders
-NON_PLACEHOLDER_URLS="$(grep -rnE 'https://[a-zA-Z0-9._-]+\.run\.app' "${ROOT_DIR}/sql" "${ROOT_DIR}/dataform" || true)"
+# Check sql/, definitions/, and workflow_settings.yaml for real Cloud Run endpoints
+NON_PLACEHOLDER_URLS="$(grep -rnE 'https://[a-zA-Z0-9._-]+\.run\.app' \
+  "${ROOT_DIR}/sql" \
+  "${ROOT_DIR}/definitions" \
+  "${ROOT_DIR}/workflow_settings.yaml" || true)"
 if [[ -n "${NON_PLACEHOLDER_URLS}" ]]; then
-  fail "Concrete .run.app endpoint found in sql/ or dataform/ (expected placeholder YOUR_CLOUD_RUN_URL):"
+  fail "Concrete .run.app endpoint found in sql/, definitions/, or workflow_settings.yaml (expected placeholder YOUR_CLOUD_RUN_URL):"
   printf '%s\n' "${NON_PLACEHOLDER_URLS}" >&2
 else
   pass "SQL and Dataform definitions use placeholders (no concrete Cloud Run URLs)."
