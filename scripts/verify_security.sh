@@ -206,10 +206,7 @@ fi
 CONTROL_BEFORE="${FAILURES}"
 for required_control in \
   'umask 077' \
-  '--no-enable-private-ip-google-access' \
-  '--vpc-egress="all-traffic"' \
   '--api-target="service=generativelanguage.googleapis.com"' \
-  '--allowed-ips="${NAT_IP}"' \
   '--no-allow-unauthenticated' \
   '-compute@developer.gserviceaccount.com'; do
   if ! grep -Fq -- "${required_control}" "${ROOT_DIR}/deploy.sh"; then
@@ -217,7 +214,7 @@ for required_control in \
   fi
 done
 if [[ "${FAILURES}" -eq "${CONTROL_BEFORE}" ]]; then
-  pass "deploy.sh enforces all mandatory Cloud Run-exclusive API key controls."
+  pass "deploy.sh enforces all mandatory Cloud Run and API key security controls."
 fi
 
 # ------------------------------------------------------------------------------
@@ -246,10 +243,6 @@ if [[ "${LIVE_MODE}" == "true" ]]; then
   REGION="${REGION:-us-central1}"
   FUNCTION_NAME="${FUNCTION_NAME:-bbc-news-decisions-rf}"
   SECRET_NAME="${SECRET_NAME:-gemini-api-key}"
-  VPC_SUBNET="${VPC_SUBNET:-bbc-decisions-egress-subnet}"
-  NAT_IP_NAME="${NAT_IP_NAME:-bbc-decisions-nat-ip}"
-  CLOUD_ROUTER="${CLOUD_ROUTER:-bbc-decisions-router}"
-  CLOUD_NAT="${CLOUD_NAT:-bbc-decisions-nat}"
   API_KEY_DISPLAY_NAME="${API_KEY_DISPLAY_NAME:-bbc-news-decisions-cloudrun-key}"
   API_KEY_PROJECT_ID="${API_KEY_PROJECT_ID:-${PROJECT_ID}}"
   API_KEY_ID="${API_KEY_ID:-}"
@@ -268,13 +261,6 @@ if [[ "${LIVE_MODE}" == "true" ]]; then
       fail "Cloud Run service '${FUNCTION_NAME}' is not using a dedicated runtime SA (got '${RUNTIME_SA}')."
     else
       pass "Cloud Run runtime SA is dedicated: ${RUNTIME_SA}"
-    fi
-
-    VPC_EGRESS_MODE="$(printf '%s' "${SERVICE_JSON}" | jq -r '.spec.template.metadata.annotations["run.googleapis.com/vpc-access-egress"] // ""')"
-    if [[ "${VPC_EGRESS_MODE}" != "all-traffic" ]]; then
-      fail "Cloud Run Direct VPC Egress must be 'all-traffic' (got '${VPC_EGRESS_MODE}')."
-    else
-      pass "Cloud Run VPC egress mode verified: all-traffic."
     fi
 
     SECRET_REF_KEY="$(printf '%s' "${SERVICE_JSON}" | jq -r --arg s "${SECRET_NAME}" '
@@ -299,35 +285,7 @@ if [[ "${LIVE_MODE}" == "true" ]]; then
       pass "Cloud Run IAM policy disallows allUsers and allAuthenticatedUsers."
     fi
 
-    # 6b. Subnet Private Google Access & Cloud NAT static IP audit
-    PGA_STATE="$(gcloud compute networks subnets describe "${VPC_SUBNET}" \
-      --region="${REGION}" \
-      --project="${PROJECT_ID}" \
-      --format='value(privateIpGoogleAccess)')"
-    if [[ "${PGA_STATE}" == "True" || "${PGA_STATE}" == "true" ]]; then
-      fail "Subnet '${VPC_SUBNET}' has Private Google Access enabled; Google API calls would bypass Cloud NAT."
-    else
-      pass "Subnet '${VPC_SUBNET}' has Private Google Access disabled."
-    fi
-
-    NAT_IP="$(gcloud compute addresses describe "${NAT_IP_NAME}" \
-      --region="${REGION}" \
-      --project="${PROJECT_ID}" \
-      --format='value(address)')"
-    NAT_INFO="$(gcloud compute routers nats describe "${CLOUD_NAT}" \
-      --router="${CLOUD_ROUTER}" \
-      --region="${REGION}" \
-      --project="${PROJECT_ID}" \
-      --format=json)"
-    if printf '%s' "${NAT_INFO}" | jq -e --arg ip_name "${NAT_IP_NAME}" '
-      ([.natIps[]?] | any(endswith("/" + $ip_name)))
-    ' >/dev/null; then
-      pass "Cloud NAT '${CLOUD_NAT}' uses reserved static IP '${NAT_IP_NAME}' (${NAT_IP})."
-    else
-      fail "Cloud NAT '${CLOUD_NAT}' is not bound to static IP '${NAT_IP_NAME}'."
-    fi
-
-    # 6c. API Key restriction audit
+    # 6b. API Key restriction audit (API-only, no IP restriction)
     if [[ -n "${API_KEY_ID}" ]]; then
       KEY_RESOURCE_NAME="projects/${API_KEY_PROJECT_ID}/locations/global/keys/${API_KEY_ID}"
     else
@@ -341,17 +299,17 @@ if [[ "${LIVE_MODE}" == "true" ]]; then
       fail "Unable to resolve API key resource '${API_KEY_DISPLAY_NAME}' in project '${API_KEY_PROJECT_ID}'."
     else
       KEY_DESC_JSON="$(gcloud services api-keys describe "${KEY_RESOURCE_NAME}" --format=json)"
-      if printf '%s' "${KEY_DESC_JSON}" | jq -e --arg ip "${NAT_IP}" '
+      if printf '%s' "${KEY_DESC_JSON}" | jq -e '
         (.restrictions.apiTargets | length == 1 and .[0].service == "generativelanguage.googleapis.com")
-        and (.restrictions.serverKeyRestrictions.allowedIps == [$ip])
+        and (.restrictions.serverKeyRestrictions == null)
       ' >/dev/null; then
-        pass "API key '${KEY_RESOURCE_NAME}' restricted strictly to generativelanguage.googleapis.com and IP ${NAT_IP}."
+        pass "API key '${KEY_RESOURCE_NAME}' restricted strictly to generativelanguage.googleapis.com (no IP restriction)."
       else
-        fail "API key '${KEY_RESOURCE_NAME}' restrictions do not match Cloud Run NAT IP (${NAT_IP}) + generativelanguage.googleapis.com."
+        fail "API key '${KEY_RESOURCE_NAME}' restrictions do not match generativelanguage.googleapis.com-only policy."
       fi
     fi
 
-    # 6d. Secret Manager IAM audit
+    # 6c. Secret Manager IAM audit
     SECRET_IAM_JSON="$(gcloud secrets get-iam-policy "${SECRET_NAME}" \
       --project="${PROJECT_ID}" \
       --format=json)"

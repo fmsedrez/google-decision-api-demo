@@ -5,14 +5,14 @@ umask 077
 # ==============================================================================
 # Hardened End-to-End Deployment: Cloud Run Function + BigQuery Remote Function
 # ==============================================================================
-# Guarantees the Gemini API key is restricted exclusively to this Cloud Run
-# service through four defense-in-depth layers:
+# Protects the Gemini API key and Cloud Run endpoint through defense-in-depth:
 #   1. Dedicated least-privilege Cloud Run service account (blocks default SA).
-#   2. Secret Manager version pinning + IAM access scoped ONLY to runtime SA.
-#   3. Dedicated Direct VPC Egress subnet (Private Google Access DISABLED)
-#      routing all outbound traffic through Cloud NAT with a static external IP.
-#   4. GCP API Key restricted via apikeys.googleapis.com to ONLY
-#      generativelanguage.googleapis.com and ONLY the Cloud NAT static IP.
+#   2. Secret Manager numeric version pinning + IAM scoped ONLY to runtime SA.
+#   3. GCP API Key restricted via apikeys.googleapis.com to ONLY
+#      generativelanguage.googleapis.com (no IP restriction, since Cloud Run
+#      routes *.googleapis.com traffic over Google's internal Andromeda fabric).
+#   4. Private Cloud Run (--no-allow-unauthenticated) invocable ONLY by the
+#      BigQuery Cloud Resource Connection service account.
 #
 # Prerequisites:
 #   - gcloud CLI authenticated (`gcloud auth login`)
@@ -49,12 +49,6 @@ SECRET_NAME="${SECRET_NAME:-gemini-api-key}"
 MAX_BATCHING_ROWS="${MAX_BATCHING_ROWS:-20}"
 
 RUNTIME_SA_NAME="${RUNTIME_SA_NAME:-bbc-news-decisions-sa}"
-VPC_NETWORK="${VPC_NETWORK:-bbc-decisions-egress-vpc}"
-VPC_SUBNET="${VPC_SUBNET:-bbc-decisions-egress-subnet}"
-VPC_SUBNET_RANGE="${VPC_SUBNET_RANGE:-10.128.0.0/24}"
-NAT_IP_NAME="${NAT_IP_NAME:-bbc-decisions-nat-ip}"
-CLOUD_ROUTER="${CLOUD_ROUTER:-bbc-decisions-router}"
-CLOUD_NAT="${CLOUD_NAT:-bbc-decisions-nat}"
 
 API_KEY_DISPLAY_NAME="${API_KEY_DISPLAY_NAME:-bbc-news-decisions-cloudrun-key}"
 API_KEY_PROJECT_ID="${API_KEY_PROJECT_ID:-${PROJECT_ID}}"
@@ -75,12 +69,6 @@ validate_regex "BQ_CONNECTION_ID" "${BQ_CONNECTION_ID}" '^[A-Za-z0-9_-]{1,1024}$
 validate_regex "SECRET_NAME" "${SECRET_NAME}" '^[A-Za-z0-9_-]{1,255}$' "a Secret Manager secret name"
 validate_regex "MAX_BATCHING_ROWS" "${MAX_BATCHING_ROWS}" '^[1-9][0-9]{0,2}$' "an integer between 1 and 999"
 validate_regex "RUNTIME_SA_NAME" "${RUNTIME_SA_NAME}" '^[a-z][a-z0-9-]{4,28}[a-z0-9]$' "a service account ID (6-30 chars)"
-validate_regex "VPC_NETWORK" "${VPC_NETWORK}" '^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$' "a valid VPC network name"
-validate_regex "VPC_SUBNET" "${VPC_SUBNET}" '^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$' "a valid VPC subnet name"
-validate_regex "VPC_SUBNET_RANGE" "${VPC_SUBNET_RANGE}" '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/(1[6-9]|2[0-6])$' "an IPv4 CIDR with /26 or larger prefix"
-validate_regex "NAT_IP_NAME" "${NAT_IP_NAME}" '^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$' "a valid Compute Engine address name"
-validate_regex "CLOUD_ROUTER" "${CLOUD_ROUTER}" '^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$' "a valid Cloud Router name"
-validate_regex "CLOUD_NAT" "${CLOUD_NAT}" '^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$' "a valid Cloud NAT gateway name"
 validate_regex "API_KEY_PROJECT_ID" "${API_KEY_PROJECT_ID}" '^[a-z][a-z0-9-]{4,28}[a-z0-9]$' "a valid GCP project ID"
 if [[ -n "${API_KEY_ID}" ]]; then
   validate_regex "API_KEY_ID" "${API_KEY_ID}" '^[a-zA-Z0-9-]+$' "an alphanumeric/hyphen API key ID"
@@ -114,7 +102,6 @@ gcloud services enable \
   bigqueryconnection.googleapis.com \
   secretmanager.googleapis.com \
   iam.googleapis.com \
-  compute.googleapis.com \
   apikeys.googleapis.com \
   generativelanguage.googleapis.com \
   --project="${PROJECT_ID}"
@@ -133,97 +120,13 @@ if ! gcloud iam service-accounts describe "${RUNTIME_SA}" --project="${PROJECT_I
 fi
 echo "==> Using dedicated Cloud Run service account: ${RUNTIME_SA}"
 
-# 4. Provision dedicated egress VPC, subnet (PGA DISABLED), static external IP, and Cloud NAT
-if ! gcloud compute networks describe "${VPC_NETWORK}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
-  gcloud compute networks create "${VPC_NETWORK}" \
-    --project="${PROJECT_ID}" \
-    --subnet-mode=custom
-fi
-
-if ! gcloud compute networks subnets describe "${VPC_SUBNET}" \
-  --region="${REGION}" \
-  --project="${PROJECT_ID}" >/dev/null 2>&1; then
-  gcloud compute networks subnets create "${VPC_SUBNET}" \
-    --project="${PROJECT_ID}" \
-    --network="${VPC_NETWORK}" \
-    --region="${REGION}" \
-    --range="${VPC_SUBNET_RANGE}" \
-    --no-enable-private-ip-google-access
-else
-  PGA_STATE="$(gcloud compute networks subnets describe "${VPC_SUBNET}" \
-    --region="${REGION}" \
-    --project="${PROJECT_ID}" \
-    --format='value(privateIpGoogleAccess)')"
-  if [[ "${PGA_STATE}" == "True" || "${PGA_STATE}" == "true" ]]; then
-    echo "==> Disabling Private Google Access on '${VPC_SUBNET}' so Gemini API calls egress via Cloud NAT..."
-    gcloud compute networks subnets update "${VPC_SUBNET}" \
-      --project="${PROJECT_ID}" \
-      --region="${REGION}" \
-      --no-enable-private-ip-google-access
-  fi
-fi
-
-# Re-verify Private Google Access is disabled (required so Google API traffic uses NAT_IP)
-PGA_VERIFY="$(gcloud compute networks subnets describe "${VPC_SUBNET}" \
-  --region="${REGION}" \
-  --project="${PROJECT_ID}" \
-  --format='value(privateIpGoogleAccess)')"
-if [[ "${PGA_VERIFY}" == "True" || "${PGA_VERIFY}" == "true" ]]; then
-  echo "ERROR: Subnet '${VPC_SUBNET}' still has Private Google Access enabled; Cloud NAT IP restriction would fail." >&2
-  exit 1
-fi
-
-if ! gcloud compute addresses describe "${NAT_IP_NAME}" \
-  --region="${REGION}" \
-  --project="${PROJECT_ID}" >/dev/null 2>&1; then
-  gcloud compute addresses create "${NAT_IP_NAME}" \
-    --project="${PROJECT_ID}" \
-    --region="${REGION}" \
-    --network-tier=PREMIUM
-fi
-
-NAT_IP="$(gcloud compute addresses describe "${NAT_IP_NAME}" \
-  --region="${REGION}" \
-  --project="${PROJECT_ID}" \
-  --format='value(address)')"
-validate_regex "NAT_IP" "${NAT_IP}" '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' "an IPv4 address"
-echo "==> Cloud NAT static egress IP: ${NAT_IP}"
-
-if ! gcloud compute routers describe "${CLOUD_ROUTER}" \
-  --region="${REGION}" \
-  --project="${PROJECT_ID}" >/dev/null 2>&1; then
-  gcloud compute routers create "${CLOUD_ROUTER}" \
-    --project="${PROJECT_ID}" \
-    --network="${VPC_NETWORK}" \
-    --region="${REGION}"
-fi
-
-if ! gcloud compute routers nats describe "${CLOUD_NAT}" \
-  --router="${CLOUD_ROUTER}" \
-  --region="${REGION}" \
-  --project="${PROJECT_ID}" >/dev/null 2>&1; then
-  gcloud compute routers nats create "${CLOUD_NAT}" \
-    --project="${PROJECT_ID}" \
-    --router="${CLOUD_ROUTER}" \
-    --region="${REGION}" \
-    --nat-custom-subnet-ip-ranges="${VPC_SUBNET}" \
-    --nat-external-ip-pool="${NAT_IP_NAME}"
-else
-  gcloud compute routers nats update "${CLOUD_NAT}" \
-    --project="${PROJECT_ID}" \
-    --router="${CLOUD_ROUTER}" \
-    --region="${REGION}" \
-    --nat-custom-subnet-ip-ranges="${VPC_SUBNET}" \
-    --nat-external-ip-pool="${NAT_IP_NAME}"
-fi
-
-# 5. Provision or restrict the Gemini API key exclusively to Cloud Run NAT_IP + Gemini API
+# 4. Provision or restrict the Gemini API key to generativelanguage.googleapis.com only
 set +x
 KEY_RESOURCE_NAME=""
 EFFECTIVE_API_KEY=""
 
 if [[ -z "${GEMINI_API_KEY:-}" ]]; then
-  # Managed Key Mode: auto-provision or reconcile a GCP API key locked to NAT_IP
+  # Managed Key Mode: auto-provision or reconcile a GCP API key restricted to Gemini API
   if [[ -n "${API_KEY_ID}" ]]; then
     KEY_RESOURCE_NAME="projects/${API_KEY_PROJECT_ID}/locations/global/keys/${API_KEY_ID}"
   else
@@ -239,7 +142,6 @@ if [[ -z "${GEMINI_API_KEY:-}" ]]; then
       --project="${API_KEY_PROJECT_ID}" \
       --display-name="${API_KEY_DISPLAY_NAME}" \
       --api-target="service=generativelanguage.googleapis.com" \
-      --allowed-ips="${NAT_IP}" \
       --quiet >/dev/null
 
     KEY_RESOURCE_NAME="$(gcloud services api-keys list \
@@ -253,15 +155,17 @@ if [[ -z "${GEMINI_API_KEY:-}" ]]; then
   else
     echo "==> Updating API key restrictions on '${KEY_RESOURCE_NAME}'..."
     gcloud services api-keys update "${KEY_RESOURCE_NAME}" \
+      --clear-restrictions \
+      --quiet >/dev/null
+    gcloud services api-keys update "${KEY_RESOURCE_NAME}" \
       --api-target="service=generativelanguage.googleapis.com" \
-      --allowed-ips="${NAT_IP}" \
       --quiet >/dev/null
   fi
 
   EFFECTIVE_API_KEY="$(gcloud services api-keys get-key-string "${KEY_RESOURCE_NAME}" --format='value(keyString)')"
 else
   # Caller-Provided Key Mode (Fail-Closed): key MUST be managed in API_KEY_PROJECT_ID
-  # so we can enforce and verify serverKeyRestrictions.allowedIps == [NAT_IP].
+  # so we can enforce and verify apiTargets == [generativelanguage.googleapis.com].
   if [[ -n "${API_KEY_ID}" ]]; then
     CANDIDATE_NAME="projects/${API_KEY_PROJECT_ID}/locations/global/keys/${API_KEY_ID}"
     CANDIDATE_STR="$(gcloud services api-keys get-key-string "${CANDIDATE_NAME}" --format='value(keyString)' 2>/dev/null || true)"
@@ -285,15 +189,17 @@ else
   if [[ -z "${KEY_RESOURCE_NAME}" ]]; then
     echo "ERROR: Provided GEMINI_API_KEY was not found in project '${API_KEY_PROJECT_ID}'." >&2
     echo "       Fail-closed policy refuses to deploy an unrestricted or unmanaged API key." >&2
-    echo "       Unset GEMINI_API_KEY to let deploy.sh create a Cloud Run-locked key automatically," >&2
+    echo "       Unset GEMINI_API_KEY to let deploy.sh create a restricted key automatically," >&2
     echo "       or set API_KEY_PROJECT_ID (and optionally API_KEY_ID) to the key's owning GCP project." >&2
     exit 1
   fi
 
-  echo "==> Enforcing IP and API restrictions on provided API key '${KEY_RESOURCE_NAME}'..."
+  echo "==> Enforcing API target restriction on provided API key '${KEY_RESOURCE_NAME}'..."
+  gcloud services api-keys update "${KEY_RESOURCE_NAME}" \
+    --clear-restrictions \
+    --quiet >/dev/null
   gcloud services api-keys update "${KEY_RESOURCE_NAME}" \
     --api-target="service=generativelanguage.googleapis.com" \
-    --allowed-ips="${NAT_IP}" \
     --quiet >/dev/null
   EFFECTIVE_API_KEY="${GEMINI_API_KEY}"
 fi
@@ -303,18 +209,18 @@ if [[ -z "${EFFECTIVE_API_KEY}" ]]; then
   exit 1
 fi
 
-# Mandatory verification gate on API key restrictions
+# Mandatory verification gate on API key restrictions (API-only, no IP restriction)
 KEY_DESC_JSON="$(gcloud services api-keys describe "${KEY_RESOURCE_NAME}" --format=json)"
-if ! printf '%s' "${KEY_DESC_JSON}" | jq -e --arg ip "${NAT_IP}" '
+if ! printf '%s' "${KEY_DESC_JSON}" | jq -e '
   (.restrictions.apiTargets | length == 1 and .[0].service == "generativelanguage.googleapis.com")
-  and (.restrictions.serverKeyRestrictions.allowedIps == [$ip])
+  and (.restrictions.serverKeyRestrictions == null)
 ' >/dev/null; then
-  echo "ERROR: API key '${KEY_RESOURCE_NAME}' failed restriction verification (expected ONLY generativelanguage.googleapis.com and allowedIps=[${NAT_IP}])." >&2
+  echo "ERROR: API key '${KEY_RESOURCE_NAME}' failed restriction verification (expected ONLY generativelanguage.googleapis.com without IP restrictions)." >&2
   exit 1
 fi
-echo "==> Verified API key '${KEY_RESOURCE_NAME}' is locked to generativelanguage.googleapis.com and IP ${NAT_IP}"
+echo "==> Verified API key '${KEY_RESOURCE_NAME}' is restricted strictly to generativelanguage.googleapis.com"
 
-# 6. Store Gemini API key in Secret Manager, pin exact version, and lock IAM to RUNTIME_SA
+# 5. Store Gemini API key in Secret Manager, pin exact version, and lock IAM to RUNTIME_SA
 if ! gcloud secrets describe "${SECRET_NAME}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
   printf '%s' "${EFFECTIVE_API_KEY}" | gcloud secrets create "${SECRET_NAME}" \
     --replication-policy="automatic" \
@@ -369,7 +275,7 @@ if ! printf '%s' "${SECRET_IAM_JSON}" | jq -e --arg sa "serviceAccount:${RUNTIME
 fi
 echo "==> Secret '${SECRET_NAME}:${SECRET_VERSION}' access verified exclusively for ${RUNTIME_SA}"
 
-# 7. Deploy Cloud Run function with Direct VPC Egress (all-traffic) & pinned secret
+# 6. Deploy Cloud Run function with dedicated SA, pinned secret, and private IAM
 gcloud run deploy "${FUNCTION_NAME}" \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
@@ -378,9 +284,6 @@ gcloud run deploy "${FUNCTION_NAME}" \
   --base-image="python315" \
   --service-account="${RUNTIME_SA}" \
   --no-allow-unauthenticated \
-  --network="${VPC_NETWORK}" \
-  --subnet="${VPC_SUBNET}" \
-  --vpc-egress="all-traffic" \
   --set-secrets="GEMINI_API_KEY=${SECRET_NAME}:${SECRET_VERSION}" \
   --set-env-vars="PYTHONUNBUFFERED=1" \
   --memory="512Mi" \
@@ -395,7 +298,7 @@ SERVICE_URL="$(gcloud run services describe "${FUNCTION_NAME}" \
 validate_regex "SERVICE_URL" "${SERVICE_URL}" '^https://[a-zA-Z0-9._-]+\.run\.app$' "a Cloud Run HTTPS URL"
 echo "==> Deployed Cloud Run function URL: ${SERVICE_URL}"
 
-# 8. Create BigQuery dataset in US multi-region (matching bigquery-public-data)
+# 7. Create BigQuery dataset in US multi-region (matching bigquery-public-data)
 if ! bq --project_id="${PROJECT_ID}" show --dataset "${PROJECT_ID}:${BQ_DATASET}" >/dev/null 2>&1; then
   bq --project_id="${PROJECT_ID}" mk \
     --dataset \
@@ -403,7 +306,7 @@ if ! bq --project_id="${PROJECT_ID}" show --dataset "${PROJECT_ID}:${BQ_DATASET}
     "${PROJECT_ID}:${BQ_DATASET}"
 fi
 
-# 9. Create BigQuery CLOUD_RESOURCE connection in US multi-region
+# 8. Create BigQuery CLOUD_RESOURCE connection in US multi-region
 if ! bq show --project_id="${PROJECT_ID}" --location="${BQ_LOCATION}" --connection "${BQ_CONNECTION_ID}" >/dev/null 2>&1; then
   bq mk --connection \
     --location="${BQ_LOCATION}" \
@@ -423,7 +326,7 @@ if [[ -z "${CONNECTION_SA}" || "${CONNECTION_SA}" == "null" ]]; then
 fi
 echo "==> BigQuery Connection Service Account: ${CONNECTION_SA}"
 
-# 10. Grant BigQuery connection service account roles/run.invoker and verify private IAM
+# 9. Grant BigQuery connection service account roles/run.invoker and verify private IAM
 gcloud run services add-iam-policy-binding "${FUNCTION_NAME}" \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
@@ -442,7 +345,7 @@ if printf '%s' "${RUN_IAM_JSON}" | jq -e '
   exit 1
 fi
 
-# 11. Create or replace the BigQuery Remote Function returning JSON
+# 10. Create or replace the BigQuery Remote Function returning JSON
 bq query \
   --project_id="${PROJECT_ID}" \
   --location="${BQ_LOCATION}" \
@@ -463,6 +366,4 @@ echo "==> BigQuery Remote Function '${PROJECT_ID}.${BQ_DATASET}.evaluate_article
 echo "==> Security posture verified:"
 echo "    - Runtime SA      : ${RUNTIME_SA}"
 echo "    - Secret version  : ${SECRET_NAME}:${SECRET_VERSION}"
-echo "    - Egress subnet   : ${VPC_SUBNET} (Private Google Access disabled)"
-echo "    - Cloud NAT IP    : ${NAT_IP}"
-echo "    - API key resource: ${KEY_RESOURCE_NAME} (generativelanguage.googleapis.com @ ${NAT_IP})"
+echo "    - API key resource: ${KEY_RESOURCE_NAME} (generativelanguage.googleapis.com only)"
