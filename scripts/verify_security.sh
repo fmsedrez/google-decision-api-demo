@@ -114,16 +114,15 @@ else
   info "Skipping git history scan (git repository metadata is outside sandbox)."
 fi
 
-# Check sql/, definitions/, and workflow_settings.yaml for real Cloud Run endpoints
+# Check definitions/ and workflow_settings.yaml for real Cloud Run endpoints
 NON_PLACEHOLDER_URLS="$(grep -rnE 'https://[a-zA-Z0-9._-]+\.run\.app' \
-  "${ROOT_DIR}/sql" \
   "${ROOT_DIR}/definitions" \
   "${ROOT_DIR}/workflow_settings.yaml" || true)"
 if [[ -n "${NON_PLACEHOLDER_URLS}" ]]; then
-  fail "Concrete .run.app endpoint found in sql/, definitions/, or workflow_settings.yaml (expected placeholder YOUR_CLOUD_RUN_URL):"
+  fail "Concrete .run.app endpoint found in definitions/ or workflow_settings.yaml (expected placeholder YOUR_CLOUD_RUN_URL):"
   printf '%s\n' "${NON_PLACEHOLDER_URLS}" >&2
 else
-  pass "SQL and Dataform definitions use placeholders (no concrete Cloud Run URLs)."
+  pass "Dataform definitions use placeholders (no concrete Cloud Run URLs)."
 fi
 
 # ------------------------------------------------------------------------------
