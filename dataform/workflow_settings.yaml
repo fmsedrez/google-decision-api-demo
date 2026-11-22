@@ -1,0 +1,9 @@
+defaultProject: YOUR_PROJECT_ID
+defaultLocation: US
+defaultDataset: bbc_news_eval
+defaultAssertionDataset: bbc_news_eval_assertions
+dataformCoreVersion: 3.0.62
+vars:
+  cloudRunEndpoint: "https://YOUR_CLOUD_RUN_URL"
+  bqConnectionId: "gemini-decisions-conn"
+  maxBatchingRows: "20"

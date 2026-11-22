@@ -1,0 +1,17 @@
+config {
+  type: "operations",
+  hasOutput: true,
+  name: "evaluate_article",
+  description: "BigQuery Remote Function calling Cloud Run + Gemini Decisions API (gemini-decision-1)."
+}
+
+CREATE OR REPLACE FUNCTION ${self()}(
+  title STRING,
+  body STRING
+)
+RETURNS JSON
+REMOTE WITH CONNECTION `${dataform.projectConfig.defaultProject}.${dataform.projectConfig.defaultLocation}.${dataform.projectConfig.vars.bqConnectionId}`
+OPTIONS (
+  endpoint = '${dataform.projectConfig.vars.cloudRunEndpoint}',
+  max_batching_rows = ${dataform.projectConfig.vars.maxBatchingRows}
+);

@@ -1,0 +1,28 @@
+config {
+  type: "view",
+  name: "eval_accuracy_by_category",
+  description: "Overall (ROLLUP) and per-category classification accuracy, average confidence, and human_review rate."
+}
+
+WITH parsed AS (
+  SELECT
+    actual_category,
+    JSON_VALUE(decision, '$.category_pred') AS category_pred,
+    SAFE.FLOAT64(decision.category_confidence) AS category_confidence,
+    JSON_VALUE(decision, '$.route') AS route,
+    JSON_VALUE(decision, '$.error') AS error_msg
+  FROM ${ref("bbc_news_decisions_50")}
+)
+SELECT
+  COALESCE(actual_category, 'ALL_CATEGORIES') AS category,
+  COUNT(*) AS total_rows,
+  COUNTIF(error_msg IS NOT NULL) AS error_rows,
+  COUNTIF(category_pred = actual_category) AS correct_rows,
+  ROUND(SAFE_DIVIDE(COUNTIF(category_pred = actual_category), COUNT(*)) * 100, 2) AS accuracy_pct,
+  ROUND(AVG(category_confidence), 4) AS avg_confidence,
+  ROUND(SAFE_DIVIDE(COUNTIF(route = 'human_review'), COUNT(*)) * 100, 2) AS human_review_pct
+FROM parsed
+GROUP BY ROLLUP(actual_category)
+ORDER BY
+  CASE WHEN actual_category IS NULL THEN 0 ELSE 1 END,
+  category

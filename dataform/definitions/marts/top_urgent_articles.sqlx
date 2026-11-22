@@ -1,0 +1,18 @@
+config {
+  type: "view",
+  name: "top_urgent_articles",
+  description: "Top 10 articles ranked by editorial_urgency_score (0-3 rubric)."
+}
+
+SELECT
+  actual_category,
+  JSON_VALUE(decision, '$.category_pred') AS category_pred,
+  ROUND(SAFE.FLOAT64(decision.editorial_urgency_score), 4) AS editorial_urgency_score,
+  ROUND(SAFE.FLOAT64(decision.is_market_moving_prob), 4) AS is_market_moving_prob,
+  ROUND(SAFE.FLOAT64(decision.category_confidence), 4) AS category_confidence,
+  JSON_VALUE(decision, '$.route') AS route,
+  title
+FROM ${ref("bbc_news_decisions_50")}
+WHERE SAFE.FLOAT64(decision.editorial_urgency_score) IS NOT NULL
+ORDER BY editorial_urgency_score DESC, is_market_moving_prob DESC
+LIMIT 10

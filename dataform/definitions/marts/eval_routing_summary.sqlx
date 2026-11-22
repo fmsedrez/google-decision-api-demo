@@ -1,0 +1,29 @@
+config {
+  type: "view",
+  name: "eval_routing_summary",
+  description: "Routing breakdown comparing auto_publish vs human_review (category_confidence < 0.75)."
+}
+
+WITH parsed AS (
+  SELECT
+    actual_category,
+    JSON_VALUE(decision, '$.category_pred') AS category_pred,
+    SAFE.FLOAT64(decision.category_confidence) AS category_confidence,
+    JSON_VALUE(decision, '$.route') AS route
+  FROM ${ref("bbc_news_decisions_50")}
+),
+totals AS (
+  SELECT COUNT(*) AS n_total FROM parsed
+)
+SELECT
+  route,
+  COUNT(*) AS article_count,
+  ROUND(SAFE_DIVIDE(COUNT(*), ANY_VALUE(totals.n_total)) * 100, 2) AS share_of_rows_pct,
+  ROUND(SAFE_DIVIDE(COUNTIF(category_pred = actual_category), COUNT(*)) * 100, 2) AS accuracy_pct,
+  ROUND(AVG(category_confidence), 4) AS avg_confidence,
+  ROUND(MIN(category_confidence), 4) AS min_confidence,
+  ROUND(MAX(category_confidence), 4) AS max_confidence
+FROM parsed
+CROSS JOIN totals
+GROUP BY route
+ORDER BY route
