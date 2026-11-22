@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Refactored `project.sh` to run in verbose interactive mode by default, explaining each modification and requesting confirmation before applying it, and added `--quiet` (`-q`) mode to run non-interactively while logging all modifications performed.
+- Refactored `deploy.sh` into modular steps with a default verbose interactive mode that explains every planned modification and prompts for user confirmation before applying changes, and added `--quiet` (`-q`) mode to run non-interactively while logging all modifications performed.
 
 ### Removed
 - Removed standalone BigQuery Studio SQL scripts (`sql/01_create_remote_function.sql`, `sql/02_evaluate_bbc_news.sql`) and their references in favor of the Dataform pipeline (`definitions/`).
