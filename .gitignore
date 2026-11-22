@@ -221,3 +221,20 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Security, Secrets & Cloud Tooling
+.DS_Store
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*credentials*.json
+*-key.json
+*service-account*.json
+.df-credentials.json
+dataform/.df-credentials.json
+
+# Javascript
+node_modules/

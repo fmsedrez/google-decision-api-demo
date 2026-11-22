@@ -1,0 +1,32 @@
+config {
+  type: "table",
+  name: "bbc_news_decisions_50",
+  description: "Stratified 50-row sample (10 per category) evaluated by Gemini Decisions API via BigQuery Remote Function.",
+  assertions: {
+    nonNull: ["actual_category", "title", "decision"],
+    rowConditions: [
+      "JSON_VALUE(decision, '$.route') IN ('auto_publish', 'human_review')",
+      "JSON_VALUE(decision, '$.error') IS NULL"
+    ]
+  }
+}
+
+WITH stratified_sample AS (
+  SELECT
+    title,
+    body,
+    category AS actual_category,
+    ROW_NUMBER() OVER (
+      PARTITION BY category
+      ORDER BY FARM_FINGERPRINT(CONCAT(COALESCE(title, ''), '|', COALESCE(body, '')))
+    ) AS rn
+  FROM ${ref("bbc_news", "fulltext")}
+  WHERE category IN ('tech', 'sport', 'business', 'politics', 'entertainment')
+)
+SELECT
+  actual_category,
+  title,
+  body,
+  ${ref("evaluate_article")}(title, body) AS decision
+FROM stratified_sample
+WHERE rn <= 10
