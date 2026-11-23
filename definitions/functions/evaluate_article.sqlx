@@ -10,7 +10,7 @@ CREATE OR REPLACE FUNCTION ${self()}(
   body STRING
 )
 RETURNS JSON
-REMOTE WITH CONNECTION `${dataform.projectConfig.defaultProject}.${dataform.projectConfig.defaultLocation}.${dataform.projectConfig.vars.bqConnectionId}`
+REMOTE WITH CONNECTION `${dataform.projectConfig.defaultDatabase}.${dataform.projectConfig.defaultLocation}.${dataform.projectConfig.vars.bqConnectionId}`
 OPTIONS (
   endpoint = '${dataform.projectConfig.vars.cloudRunEndpoint}',
   max_batching_rows = ${dataform.projectConfig.vars.maxBatchingRows}
