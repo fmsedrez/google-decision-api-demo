@@ -677,7 +677,7 @@ step_sync_repository_files() {
       commitMetadata: {
         author: {
           name: $name,
-          email: $email
+          emailAddress: $email
         },
         commitMessage: $msg
       },

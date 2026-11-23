@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed standalone BigQuery Studio SQL scripts (`sql/01_create_remote_function.sql`, `sql/02_evaluate_bbc_news.sql`) and their references in favor of the Dataform pipeline (`definitions/`).
 
 ### Fixed
+- Fixed `dataform.sh` repository commit payload to use `commitMetadata.author.emailAddress` (instead of `email`) matching the Google Cloud Dataform API `CommitAuthor` schema.
 - Fixed `deploy.sh` Cloud Run source deployment failures (`PERMISSION_DENIED` on new GCP projects where the default Cloud Build service account lacks IAM roles) by provisioning a dedicated least-privilege Cloud Build service account (`bbc-news-decisions-build-sa`), granting it the minimal build IAM roles (`roles/run.builder`, `roles/cloudbuild.builds.builder`, `roles/artifactregistry.writer`, `roles/logging.logWriter`, `roles/storage.objectViewer`, `roles/serviceusage.serviceUsageConsumer`), and passing `--build-service-account` to `gcloud run deploy`.
 - Pruned nested `.venv` directories (such as `function/.venv`) in `scripts/verify_security.sh` so `certifi/cacert.pem` is not flagged as a forbidden secret file.
 - Updated placeholder URL check in `scripts/verify_security.sh` to scan `definitions/` and `workflow_settings.yaml` instead of the removed `dataform/` directory.
