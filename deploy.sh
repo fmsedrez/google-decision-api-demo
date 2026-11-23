@@ -806,6 +806,7 @@ print_summary() {
       printf '  * %s\n' "${item}"
     done
   fi
+  printf '\nNext: ./dataform.sh\n'
 }
 
 main() {

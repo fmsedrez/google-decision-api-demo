@@ -85,7 +85,16 @@ export GEMINI_API_KEY="your-managed-api-key"
 
 ### Dataform Pipeline
 
-Update `defaultProject` and `vars.cloudRunEndpoint` in [workflow_settings.yaml](workflow_settings.yaml), then compile and run the Dataform DAG:
+Run [dataform.sh](dataform.sh) after `./deploy.sh` to provision and configure the Google Cloud Dataform environment automatically. It enables `dataform.googleapis.com`, resolves the deployed Cloud Run URL, creates/configures the Dataform repository, grants required BigQuery and Connection IAM roles to the Dataform service agent, commits `definitions/` along with a rendered `workflow_settings.yaml` (`defaultProject` and `vars.cloudRunEndpoint` populated while keeping local [workflow_settings.yaml](workflow_settings.yaml) clean with placeholders), creates a development workspace, configures the release config compilation overrides, and verifies compilation:
+
+```bash
+./dataform.sh          # verbose interactive mode (confirms each modification)
+./dataform.sh --quiet  # non-interactive mode (logs all modifications)
+```
+
+To link an external Git remote instead of a Dataform-hosted repository, export `DATAFORM_GIT_URL` (and optionally `DATAFORM_GIT_TOKEN_SECRET_VERSION` for private repositories). Run `./dataform.sh --help` for all configurable environment variables.
+
+Pipeline assets:
 
 - Source declaration: [definitions/sources/bbc_news_fulltext.sqlx](definitions/sources/bbc_news_fulltext.sqlx)
 - Remote function operation: [definitions/functions/evaluate_article.sqlx](definitions/functions/evaluate_article.sqlx)
