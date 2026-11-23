@@ -334,6 +334,29 @@ step_enable_apis() {
   fi
 }
 
+# Retry an IAM policy binding command when a newly created service account
+# has not yet propagated across GCP IAM backends ("does not exist").
+retry_iam_binding() {
+  local max_attempts=6
+  local delay_seconds=5
+  local attempt=1
+  local err_output=""
+
+  while true; do
+    if err_output="$("$@" 2>&1)"; then
+      return 0
+    fi
+    if [[ "${attempt}" -lt "${max_attempts}" && "${err_output}" == *"does not exist"* ]]; then
+      log_info "Service account not yet visible to IAM (attempt ${attempt}/${max_attempts}); retrying in ${delay_seconds}s..."
+      sleep "${delay_seconds}"
+      attempt=$((attempt + 1))
+      continue
+    fi
+    printf '%s\n' "${err_output}" >&2
+    return 1
+  done
+}
+
 # ------------------------------------------------------------------------------
 # Step 3: Ensure dedicated Cloud Run runtime and build service accounts exist
 # ------------------------------------------------------------------------------
@@ -418,11 +441,11 @@ step_ensure_runtime_sa() {
       "${role_details[@]}"
 
     for role in "${missing_build_roles[@]}"; do
-      gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+      retry_iam_binding gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
         --member="serviceAccount:${BUILD_SA}" \
         --role="${role}" \
         --condition=None \
-        --quiet >/dev/null
+        --quiet
     done
     log_modified "Granted build IAM roles on '${PROJECT_ID}' to '${BUILD_SA}': ${missing_build_roles[*]}"
     build_sa_changed="true"
@@ -669,7 +692,7 @@ step_configure_secret() {
       "Add member: serviceAccount:${RUNTIME_SA}" \
       "Role: roles/secretmanager.secretAccessor"
 
-    gcloud secrets add-iam-policy-binding "${SECRET_NAME}" \
+    retry_iam_binding gcloud secrets add-iam-policy-binding "${SECRET_NAME}" \
       --member="serviceAccount:${RUNTIME_SA}" \
       --role="roles/secretmanager.secretAccessor" \
       --project="${PROJECT_ID}" \
