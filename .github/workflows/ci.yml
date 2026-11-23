@@ -30,7 +30,7 @@ jobs:
         run: uv run --project function python -m unittest discover -s function/tests -v
 
       - name: Lint shell scripts
-        run: shellcheck deploy.sh scripts/verify_security.sh
+        run: shellcheck project.sh deploy.sh dataform.sh scripts/verify_security.sh
 
       - name: Run pre-release security gates
         run: PYTHON_BIN="function/.venv/bin/python" ./scripts/verify_security.sh

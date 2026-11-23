@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added `dataform.sh` to provision and configure the Google Cloud Dataform environment (enables `dataform.googleapis.com`, resolves the Cloud Run endpoint, creates/updates the Dataform repository with `defaultProject` overrides and optional external Git remote, grants BigQuery/Connection IAM roles to the Dataform service agent, syncs `definitions/` with a rendered `workflow_settings.yaml` setting `defaultProject` and `vars.cloudRunEndpoint`, creates a development workspace, configures a release config, and verifies compilation). Supports default verbose interactive mode and `--quiet` (`-q`) mode.
+
 ### Changed
 - Refactored `project.sh` to run in verbose interactive mode by default, explaining each modification and requesting confirmation before applying it, and added `--quiet` (`-q`) mode to run non-interactively while logging all modifications performed.
 - Refactored `deploy.sh` into modular steps with a default verbose interactive mode that explains every planned modification and prompts for user confirmation before applying changes, and added `--quiet` (`-q`) mode to run non-interactively while logging all modifications performed.

@@ -189,15 +189,15 @@ fi
 # ------------------------------------------------------------------------------
 # 4. Shell Script Static Validation & Hardened Deployment Controls
 # ------------------------------------------------------------------------------
-if bash -n "${ROOT_DIR}/deploy.sh" "${ROOT_DIR}/scripts/verify_security.sh"; then
-  pass "bash -n syntax checks passed for deploy.sh and scripts/verify_security.sh."
+if bash -n "${ROOT_DIR}/project.sh" "${ROOT_DIR}/deploy.sh" "${ROOT_DIR}/dataform.sh" "${ROOT_DIR}/scripts/verify_security.sh"; then
+  pass "bash -n syntax checks passed for project.sh, deploy.sh, dataform.sh, and scripts/verify_security.sh."
 else
   fail "bash -n syntax check failed."
 fi
 
 if command -v shellcheck >/dev/null 2>&1; then
-  if shellcheck "${ROOT_DIR}/deploy.sh" "${ROOT_DIR}/scripts/verify_security.sh"; then
-    pass "shellcheck passed for deploy.sh and scripts/verify_security.sh."
+  if shellcheck "${ROOT_DIR}/project.sh" "${ROOT_DIR}/deploy.sh" "${ROOT_DIR}/dataform.sh" "${ROOT_DIR}/scripts/verify_security.sh"; then
+    pass "shellcheck passed for project.sh, deploy.sh, dataform.sh, and scripts/verify_security.sh."
   else
     fail "shellcheck reported issues."
   fi
@@ -215,8 +215,11 @@ for required_control in \
     fail "deploy.sh is missing required security control: ${required_control}"
   fi
 done
+if ! grep -Fq -- 'umask 077' "${ROOT_DIR}/dataform.sh"; then
+  fail "dataform.sh is missing required security control: umask 077"
+fi
 if [[ "${FAILURES}" -eq "${CONTROL_BEFORE}" ]]; then
-  pass "deploy.sh enforces all mandatory Cloud Run and API key security controls."
+  pass "deploy.sh and dataform.sh enforce all mandatory security controls."
 fi
 
 # ------------------------------------------------------------------------------
