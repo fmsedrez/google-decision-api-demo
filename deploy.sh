@@ -62,6 +62,7 @@ Configurable environment variables:
   SECRET_NAME          Secret Manager secret name (default: gemini-api-key)
   MAX_BATCHING_ROWS    BigQuery remote function batch size (default: 20)
   RUNTIME_SA_NAME      Dedicated runtime SA ID (default: bbc-news-decisions-sa)
+  BUILD_SA_NAME        Dedicated Cloud Build SA ID (default: bbc-news-decisions-build-sa)
   API_KEY_DISPLAY_NAME Managed API key display name (default: bbc-news-decisions-cloudrun-key)
   API_KEY_PROJECT_ID   GCP project owning the API key (default: PROJECT_ID)
   API_KEY_ID           Optional API key UUID for direct lookup
@@ -196,6 +197,7 @@ load_and_validate_config() {
   MAX_BATCHING_ROWS="${MAX_BATCHING_ROWS:-20}"
 
   RUNTIME_SA_NAME="${RUNTIME_SA_NAME:-bbc-news-decisions-sa}"
+  BUILD_SA_NAME="${BUILD_SA_NAME:-bbc-news-decisions-build-sa}"
 
   API_KEY_DISPLAY_NAME="${API_KEY_DISPLAY_NAME:-bbc-news-decisions-cloudrun-key}"
   API_KEY_PROJECT_ID="${API_KEY_PROJECT_ID:-${PROJECT_ID}}"
@@ -224,6 +226,7 @@ load_and_validate_config() {
   validate_regex "SECRET_NAME" "${SECRET_NAME}" '^[A-Za-z0-9_-]{1,255}$' "a Secret Manager secret name"
   validate_regex "MAX_BATCHING_ROWS" "${MAX_BATCHING_ROWS}" '^[1-9][0-9]{0,2}$' "an integer between 1 and 999"
   validate_regex "RUNTIME_SA_NAME" "${RUNTIME_SA_NAME}" '^[a-z][a-z0-9-]{4,28}[a-z0-9]$' "a service account ID (6-30 chars)"
+  validate_regex "BUILD_SA_NAME" "${BUILD_SA_NAME}" '^[a-z][a-z0-9-]{4,28}[a-z0-9]$' "a service account ID (6-30 chars)"
   validate_regex "API_KEY_PROJECT_ID" "${API_KEY_PROJECT_ID}" '^[a-z][a-z0-9-]{4,28}[a-z0-9]$' "a valid GCP project ID"
   if [[ -n "${API_KEY_ID}" ]]; then
     validate_regex "API_KEY_ID" "${API_KEY_ID}" '^[a-zA-Z0-9-]+$' "an alphanumeric/hyphen API key ID"
@@ -235,6 +238,17 @@ load_and_validate_config() {
     exit 1
   fi
   validate_regex "RUNTIME_SA" "${RUNTIME_SA}" '^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$' "a project service account email"
+
+  BUILD_SA="${BUILD_SA:-${BUILD_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com}"
+  if [[ "${BUILD_SA}" == *-compute@developer.gserviceaccount.com ]]; then
+    log_error "Refusing to use the shared Compute Engine default SA (${BUILD_SA}) for Cloud Build. Use a dedicated build SA."
+    exit 1
+  fi
+  if [[ "${BUILD_SA}" == "${RUNTIME_SA}" ]]; then
+    log_error "BUILD_SA (${BUILD_SA}) must be distinct from RUNTIME_SA (${RUNTIME_SA}) so runtime stays zero-role and build has no Secret Manager access."
+    exit 1
+  fi
+  validate_regex "BUILD_SA" "${BUILD_SA}" '^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$' "a project service account email"
 
   if [[ "${QUIET_MODE}" == "true" ]]; then
     log_info "Starting deployment in QUIET mode (no confirmation prompts; all modifications logged)."
@@ -321,15 +335,15 @@ step_enable_apis() {
 }
 
 # ------------------------------------------------------------------------------
-# Step 3: Ensure dedicated least-privilege Cloud Run service account exists
+# Step 3: Ensure dedicated Cloud Run runtime and build service accounts exist
 # ------------------------------------------------------------------------------
 step_ensure_runtime_sa() {
-  log_step 3 "Ensure dedicated least-privilege Cloud Run service account"
+  log_step 3 "Ensure dedicated Cloud Run runtime and build service accounts"
 
   if ! gcloud iam service-accounts describe "${RUNTIME_SA}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
     local sa_account_id="${RUNTIME_SA%%@*}"
     confirm_modification \
-      "Create dedicated Cloud Run service account '${RUNTIME_SA}'" \
+      "Create dedicated Cloud Run runtime service account '${RUNTIME_SA}'" \
       "Project: ${PROJECT_ID}" \
       "Account ID: ${sa_account_id}" \
       "Display name: BBC News Decisions Cloud Run SA" \
@@ -340,9 +354,85 @@ step_ensure_runtime_sa() {
       --project="${PROJECT_ID}" \
       --display-name="BBC News Decisions Cloud Run SA" \
       --description="Dedicated least-privilege runtime identity for ${FUNCTION_NAME}"
-    log_modified "Created dedicated Cloud Run service account '${RUNTIME_SA}'"
+    log_modified "Created dedicated Cloud Run runtime service account '${RUNTIME_SA}'"
   else
-    log_unchanged "Dedicated Cloud Run service account '${RUNTIME_SA}' already exists."
+    log_unchanged "Dedicated Cloud Run runtime service account '${RUNTIME_SA}' already exists."
+  fi
+
+  local build_sa_changed="false"
+  if ! gcloud iam service-accounts describe "${BUILD_SA}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    local build_sa_account_id="${BUILD_SA%%@*}"
+    confirm_modification \
+      "Create dedicated Cloud Build service account '${BUILD_SA}'" \
+      "Project: ${PROJECT_ID}" \
+      "Account ID: ${build_sa_account_id}" \
+      "Display name: BBC News Decisions Cloud Build SA" \
+      "Description: Dedicated least-privilege build identity for ${FUNCTION_NAME} source deployments" \
+      "Secret Manager access: none"
+
+    gcloud iam service-accounts create "${build_sa_account_id}" \
+      --project="${PROJECT_ID}" \
+      --display-name="BBC News Decisions Cloud Build SA" \
+      --description="Dedicated least-privilege build identity for ${FUNCTION_NAME} source deployments"
+    log_modified "Created dedicated Cloud Build service account '${BUILD_SA}'"
+    build_sa_changed="true"
+  else
+    log_unchanged "Dedicated Cloud Build service account '${BUILD_SA}' already exists."
+  fi
+
+  local required_build_roles=(
+    roles/run.builder
+    roles/cloudbuild.builds.builder
+    roles/artifactregistry.writer
+    roles/logging.logWriter
+    roles/storage.objectViewer
+    roles/serviceusage.serviceUsageConsumer
+  )
+
+  local project_iam_json
+  project_iam_json="$(gcloud projects get-iam-policy "${PROJECT_ID}" --format=json)"
+
+  local missing_build_roles=()
+  local role
+  for role in "${required_build_roles[@]}"; do
+    if ! printf '%s' "${project_iam_json}" | jq -e \
+      --arg role "${role}" \
+      --arg member "serviceAccount:${BUILD_SA}" '
+      [.bindings[]? | select(.role == $role) | .members[]?] | index($member) != null
+    ' >/dev/null; then
+      missing_build_roles+=("${role}")
+    fi
+  done
+
+  if [[ ${#missing_build_roles[@]} -gt 0 ]]; then
+    local role_details=(
+      "Project: ${PROJECT_ID}"
+      "Member: serviceAccount:${BUILD_SA}"
+    )
+    for role in "${missing_build_roles[@]}"; do
+      role_details+=("Grant role: ${role}")
+    done
+
+    confirm_modification \
+      "Grant ${#missing_build_roles[@]} Cloud Run build IAM role(s) to '${BUILD_SA}'" \
+      "${role_details[@]}"
+
+    for role in "${missing_build_roles[@]}"; do
+      gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+        --member="serviceAccount:${BUILD_SA}" \
+        --role="${role}" \
+        --condition=None \
+        --quiet >/dev/null
+    done
+    log_modified "Granted build IAM roles on '${PROJECT_ID}' to '${BUILD_SA}': ${missing_build_roles[*]}"
+    build_sa_changed="true"
+  else
+    log_unchanged "Cloud Build service account '${BUILD_SA}' already holds all required build IAM roles."
+  fi
+
+  if [[ "${build_sa_changed}" == "true" ]]; then
+    log_info "Waiting 15s for Cloud Build service account IAM propagation..."
+    sleep 15
   fi
 }
 
@@ -614,7 +704,8 @@ step_deploy_cloud_run() {
     "Region: ${REGION}" \
     "Source: ${FUNCTION_DIR}" \
     "Entry point: ${ENTRY_POINT} (base-image: python315)" \
-    "Service account: ${RUNTIME_SA}" \
+    "Runtime service account: ${RUNTIME_SA}" \
+    "Build service account: ${BUILD_SA}" \
     "Access control: --no-allow-unauthenticated (private)" \
     "Secret mount: GEMINI_API_KEY=${SECRET_NAME}:${SECRET_VERSION}" \
     "Env vars: PYTHONUNBUFFERED=1" \
@@ -627,6 +718,7 @@ step_deploy_cloud_run() {
     --function="${ENTRY_POINT}" \
     --base-image="python315" \
     --service-account="${RUNTIME_SA}" \
+    --build-service-account="projects/${PROJECT_ID}/serviceAccounts/${BUILD_SA}" \
     --no-allow-unauthenticated \
     --set-secrets="GEMINI_API_KEY=${SECRET_NAME}:${SECRET_VERSION}" \
     --set-env-vars="PYTHONUNBUFFERED=1" \
@@ -794,6 +886,7 @@ print_summary() {
   printf 'Cloud Run URL            : %s\n' "${SERVICE_URL}"
   printf 'Security posture verified:\n'
   printf '  - Runtime SA      : %s\n' "${RUNTIME_SA}"
+  printf '  - Build SA        : %s\n' "${BUILD_SA}"
   printf '  - Secret version  : %s:%s\n' "${SECRET_NAME}" "${SECRET_VERSION}"
   printf '  - API key resource: %s (generativelanguage.googleapis.com only)\n' "${KEY_RESOURCE_NAME}"
 
