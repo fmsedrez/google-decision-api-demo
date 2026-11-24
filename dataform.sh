@@ -36,6 +36,9 @@ umask 077
 # ==============================================================================
 
 QUIET_MODE="false"
+RUN_WORKFLOW="false"
+WORKFLOW_POLL_INTERVAL=5
+WORKFLOW_TIMEOUT_SECONDS="${WORKFLOW_TIMEOUT_SECONDS:-600}"
 TOTAL_STEPS=8
 MODIFICATIONS_LOG=()
 
@@ -59,6 +62,8 @@ Modes:
                   and asks for confirmation before applying it.
   -q, --quiet     Non-interactive mode: applies all modifications without
                   prompting, while logging everything that was modified.
+  -r, --run       Also trigger a Dataform workflow invocation after compilation
+                  to materialize BigQuery tables, views, and assertions.
   -h, --help      Show this help message and exit.
 
 Configurable environment variables:
@@ -89,6 +94,10 @@ parse_args() {
     case "${arg}" in
       -q|--quiet)
         QUIET_MODE="true"
+        ;;
+      -r|--run)
+        RUN_WORKFLOW="true"
+        TOTAL_STEPS=9
         ;;
       -h|--help)
         usage
@@ -863,6 +872,65 @@ step_verify_compilation() {
 }
 
 # ------------------------------------------------------------------------------
+# Step 9 (optional --run): Execute Dataform workflow invocation in BigQuery
+# ------------------------------------------------------------------------------
+step_run_workflow_invocation() {
+  if [[ "${RUN_WORKFLOW}" != "true" ]]; then
+    return 0
+  fi
+
+  log_step 9 "Execute Dataform workflow invocation in BigQuery"
+
+  local invoke_payload
+  invoke_payload="$(jq -n --arg cr "${COMPILATION_RESULT_NAME}" '{compilationResult: $cr}')"
+
+  confirm_modification \
+    "Execute Dataform workflow invocation from '${COMPILATION_RESULT_NAME}'" \
+    "Repository: ${REPO_RESOURCE}" \
+    "Dataset: ${PROJECT_ID}:${BQ_DATASET} (assertions: ${BQ_ASSERTION_DATASET})" \
+    "Effect: Runs remote function, staging table, assertions, and analytical marts in BigQuery"
+
+  dataform_api_request "POST" \
+    "${DATAFORM_API_BASE}/${REPO_RESOURCE}/workflowInvocations" \
+    "${invoke_payload}"
+  require_api_2xx "Create Dataform workflow invocation"
+
+  local invocation_name state elapsed=0
+  invocation_name="$(printf '%s' "${API_RESPONSE_BODY}" | jq -r '.name // ""')"
+  state="$(printf '%s' "${API_RESPONSE_BODY}" | jq -r '.state // "RUNNING"')"
+  log_info "Started workflow invocation: ${invocation_name} (state=${state})"
+
+  while [[ "${state}" == "RUNNING" || "${state}" == "CANCELING" ]]; do
+    if [[ "${elapsed}" -ge "${WORKFLOW_TIMEOUT_SECONDS}" ]]; then
+      log_error "Timed out after ${WORKFLOW_TIMEOUT_SECONDS}s waiting for workflow invocation '${invocation_name}'."
+      exit 1
+    fi
+    sleep "${WORKFLOW_POLL_INTERVAL}"
+    elapsed=$((elapsed + WORKFLOW_POLL_INTERVAL))
+    dataform_api_request "GET" "${DATAFORM_API_BASE}/${invocation_name}"
+    require_api_2xx "Poll Dataform workflow invocation '${invocation_name}'"
+    state="$(printf '%s' "${API_RESPONSE_BODY}" | jq -r '.state // ""')"
+    log_info "Workflow invocation state (${elapsed}s): ${state}"
+  done
+
+  if [[ "${state}" != "SUCCEEDED" ]]; then
+    log_error "Dataform workflow invocation ended with state '${state}'."
+    dataform_api_request "GET" "${DATAFORM_API_BASE}/${invocation_name}:query?pageSize=100"
+    if [[ "${API_HTTP_STATUS}" =~ ^2[0-9][0-9]$ ]]; then
+      printf '%s' "${API_RESPONSE_BODY}" | jq -r '
+        .workflowInvocationActions[]?
+        | select(.state == "FAILED")
+        | "  - [\(.target.schema // "").\(.target.name // "")] \(.failureReason // "failed")"
+      ' >&2
+    fi
+    exit 1
+  fi
+
+  log_modified "Executed Dataform workflow invocation '${invocation_name}'"
+  log_verified "All Dataform tables, assertions, and analytical marts materialized in BigQuery."
+}
+
+# ------------------------------------------------------------------------------
 # Summary
 # ------------------------------------------------------------------------------
 print_summary() {
@@ -902,6 +970,7 @@ main() {
   step_ensure_workspace
   step_ensure_release_config
   step_verify_compilation
+  step_run_workflow_invocation
 
   print_summary
 }
