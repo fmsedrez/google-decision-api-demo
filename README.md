@@ -90,6 +90,7 @@ Run [dataform.sh](dataform.sh) after `./deploy.sh` to provision and configure th
 ```bash
 ./dataform.sh          # verbose interactive mode (confirms each modification)
 ./dataform.sh --quiet  # non-interactive mode (logs all modifications)
+./dataform.sh --run    # also execute the compiled Dataform workflow in BigQuery
 ```
 
 To link an external Git remote instead of a Dataform-hosted repository, export `DATAFORM_GIT_URL` (and optionally `DATAFORM_GIT_TOKEN_SECRET_VERSION` for private repositories). Run `./dataform.sh --help` for all configurable environment variables.
@@ -100,6 +101,32 @@ Pipeline assets:
 - Remote function operation: [definitions/functions/evaluate_article.sqlx](definitions/functions/evaluate_article.sqlx)
 - Staging table + assertions: [definitions/staging/bbc_news_decisions_50.sqlx](definitions/staging/bbc_news_decisions_50.sqlx)
 - Analytical marts: `eval_accuracy_by_category`, `eval_routing_summary`, `top_market_moving_articles`, `top_urgent_articles`
+
+---
+
+## Missão Antigravity CLI: Construindo Inteligência Editorial em Escala no Google Cloud
+
+> Desbloqueie desafios reais direto no terminal! Use o Antigravity CLI (`agy`) para expandir um pipeline com Gemini Decisions API, Cloud Run e BigQuery/Dataform: crie filas inteligentes de checagem de fatos, meça latência e gere relatórios via CLI.
+
+Use [workshop.sh](workshop.sh) to run the progressive two-part hands-on workshop powered by **Antigravity CLI (`agy`)**:
+
+1. **Provision the base environment first** (Task 1 stays locked until all three scripts have been executed):
+   ```bash
+   ./project.sh
+   ./deploy.sh
+   ./dataform.sh
+   ```
+2. **Unlock and view your current task prompt**:
+   ```bash
+   ./workshop.sh
+   ```
+3. **Build with `agy`, deploy new Cloud Run revisions / Dataform items, and validate to unlock Task 2**:
+   ```bash
+   ./deploy.sh -q && ./dataform.sh -q --run   # or: ./workshop.sh deploy -q
+   ./workshop.sh validate
+   ```
+
+Run `./workshop.sh --help` for all workshop commands (`status`, `validate`, `deploy`, `reset`).
 
 ---
 

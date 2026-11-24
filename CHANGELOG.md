@@ -8,9 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added `workshop.sh` progressive workshop runner and validator for Antigravity CLI (`agy`), enforcing sequential gates (`project.sh` + `deploy.sh` + `dataform.sh` prerequisite verification before unlocking Task 1, and full local + live Cloud Run/Dataform/BigQuery verification of Task 1 before unlocking Task 2) along with incremental deployment helper (`./workshop.sh deploy`).
+- Added `--run` (`-r`) option to `dataform.sh` to execute a Dataform workflow invocation after compilation and materialize updated BigQuery tables, assertions, and views.
 - Added `dataform.sh` to provision and configure the Google Cloud Dataform environment (enables `dataform.googleapis.com`, resolves the Cloud Run endpoint, creates/updates the Dataform repository with `defaultProject` overrides and optional external Git remote, grants BigQuery/Connection IAM roles to the Dataform service agent, syncs `definitions/` with a rendered `workflow_settings.yaml` setting `defaultProject` and `vars.cloudRunEndpoint`, creates a development workspace, configures a release config, and verifies compilation). Supports default verbose interactive mode and `--quiet` (`-q`) mode.
 
 ### Changed
+- Updated `scripts/verify_security.sh`, `.github/workflows/ci.yml`, and `.gitignore` to lint `workshop.sh` and `scripts/*.sh` and exclude `.workshop/` local state.
 - Refactored `project.sh` to run in verbose interactive mode by default, explaining each modification and requesting confirmation before applying it, and added `--quiet` (`-q`) mode to run non-interactively while logging all modifications performed.
 - Refactored `deploy.sh` into modular steps with a default verbose interactive mode that explains every planned modification and prompts for user confirmation before applying changes, and added `--quiet` (`-q`) mode to run non-interactively while logging all modifications performed.
 

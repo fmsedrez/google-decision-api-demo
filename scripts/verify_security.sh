@@ -189,15 +189,25 @@ fi
 # ------------------------------------------------------------------------------
 # 4. Shell Script Static Validation & Hardened Deployment Controls
 # ------------------------------------------------------------------------------
-if bash -n "${ROOT_DIR}/project.sh" "${ROOT_DIR}/deploy.sh" "${ROOT_DIR}/dataform.sh" "${ROOT_DIR}/scripts/verify_security.sh"; then
-  pass "bash -n syntax checks passed for project.sh, deploy.sh, dataform.sh, and scripts/verify_security.sh."
+SHELL_SCRIPTS=(
+  "${ROOT_DIR}/project.sh"
+  "${ROOT_DIR}/deploy.sh"
+  "${ROOT_DIR}/dataform.sh"
+  "${ROOT_DIR}/workshop.sh"
+)
+for extra_sh in "${ROOT_DIR}/scripts/"*.sh; do
+  [[ -f "${extra_sh}" ]] && SHELL_SCRIPTS+=("${extra_sh}")
+done
+
+if bash -n "${SHELL_SCRIPTS[@]}"; then
+  pass "bash -n syntax checks passed for ${#SHELL_SCRIPTS[@]} shell script(s)."
 else
   fail "bash -n syntax check failed."
 fi
 
 if command -v shellcheck >/dev/null 2>&1; then
-  if shellcheck "${ROOT_DIR}/project.sh" "${ROOT_DIR}/deploy.sh" "${ROOT_DIR}/dataform.sh" "${ROOT_DIR}/scripts/verify_security.sh"; then
-    pass "shellcheck passed for project.sh, deploy.sh, dataform.sh, and scripts/verify_security.sh."
+  if shellcheck "${SHELL_SCRIPTS[@]}"; then
+    pass "shellcheck passed for ${#SHELL_SCRIPTS[@]} shell script(s)."
   else
     fail "shellcheck reported issues."
   fi
